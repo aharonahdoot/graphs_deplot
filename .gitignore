@@ -1,0 +1,19 @@
+# --- Python / env ---
+.venv/
+__pycache__/
+
+# --- macOS junk ---
+.DS_Store
+
+# --- agent scaffolding (not part of the method) ---
+.fablize/
+CLAUDE.md
+
+# --- large / generated data, kept local, not published ---
+output/
+output_*/
+outputs/
+single_curve
+experiments/out
+Growth_Curves_NCI_BRCA
+data
