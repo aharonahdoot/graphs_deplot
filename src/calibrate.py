@@ -6,12 +6,20 @@ many and fit with RANSAC (largest consensus set of collinear labels, then a
 least-squares refit on the inliers), which ignores the occasional OCR misread
 (e.g. "550.00" -> "250.00") as long as most labels are correct.
 """
+import os
 import re
 import cv2
 import numpy as np
 import pytesseract
 
 from markers import find_spines
+
+# Locate the tesseract binary. On Linux/macOS it is normally on PATH; on Windows
+# (or any non-standard install) point to it with the TESSERACT_CMD env var, e.g.
+#   set TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe
+_TESS_CMD = os.environ.get("TESSERACT_CMD")
+if _TESS_CMD:
+    pytesseract.pytesseract.tesseract_cmd = _TESS_CMD
 
 _CFG = "--psm 11 -c tessedit_char_whitelist=0123456789,.-"
 _NUM = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?")

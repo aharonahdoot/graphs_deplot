@@ -47,6 +47,9 @@ def _plot_bbox(S, V):
     return int(x), int(y), int(x + w - 1), int(y + h - 1)
 
 
+_RECOVER_CUT_TOP = True   # extend the box top to the cut edge on top-clipped plots
+
+
 def find_spines(bgr):
     """Return (left, top, right, bottom) of the plot box from the strong long
     dark axis spines."""
@@ -62,6 +65,24 @@ def find_spines(bgr):
     # ignore image-border artefacts
     vcols = vcols[(vcols > 4) & (vcols < W - 4)]
     hrows = hrows[(hrows > 4) & (hrows < H - 4)]
+
+    # Constrain spine candidates to the cream PLOTTING region. A page/figure
+    # border line OUTSIDE the plot (e.g. a rule below the "Study Days" title) is a
+    # long dark horizontal line that would otherwise win `hrows.max()` and be
+    # taken as the x-axis -- dragging the box, and the label-masking band, down
+    # over the tick labels (which then detect as a spurious row of markers). The
+    # cream bbox bounds the real plot, so drop any line beyond it (small margin).
+    plot = _plot_bbox(S, V)
+    if plot:
+        px0, py0, px1, py1 = plot
+        mw, mh = max(10, int(0.03 * W)), max(10, int(0.03 * H))
+        hin = hrows[(hrows >= py0 - mh) & (hrows <= py1 + mh)]
+        vin = vcols[(vcols >= px0 - mw) & (vcols <= px1 + mw)]
+        if len(hin):
+            hrows = hin
+        if len(vin):
+            vcols = vin
+
     left = int(vcols.min()) if len(vcols) else int(0.09 * W)
     bottom = int(hrows.max()) if len(hrows) else int(0.92 * H)
     right = int(vcols.max()) if len(vcols) and vcols.max() > left + 50 else W - 2
@@ -70,9 +91,21 @@ def find_spines(bgr):
     # degenerate box, fall back to the cream plot-area bounding box. Only fires
     # on degenerate boxes, so non-degenerate (working) charts are unaffected.
     if right - left < 0.4 * W or bottom - top < 0.4 * H:
-        fb = _plot_bbox(S, V)
-        if fb:
-            left, top, right, bottom = fb
+        if plot:
+            left, top, right, bottom = plot
+
+    # If the plot is CUT OFF at the top image edge (the cream interior extends
+    # above the detected top, with no white margin or frame above it), the topmost
+    # strong line is the first GRIDLINE -- one tick BELOW the true top -- so the box
+    # ends a tick early and clips the highest data point (which then either goes
+    # undetected or shows up as a stub at the box edge). Walk up while the row is
+    # still plot interior (cream) to recover the true top (the cut edge). Charts
+    # with a white margin / top frame stop immediately and are unaffected.
+    if _RECOVER_CUT_TOP:
+        cream = (V > 205) & (S > 10) & (S < 90)
+        xa, xb = left + 5, max(left + 6, right - 5)
+        while top - 1 >= 0 and cream[top - 1, xa:xb].mean() > 0.5:
+            top -= 1
     return left, top, right, bottom
 
 

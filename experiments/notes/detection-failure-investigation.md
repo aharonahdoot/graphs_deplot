@@ -141,3 +141,31 @@ correct) — plus the human-overlay gridline checks on real images. Calibration
 **success rate** is reported separately and is pessimistic on synthetic for the
 yield reason above. Gross-misread graphs are stratified out of the precision
 percentiles (not deleted): the success rate is reported as a headline metric.
+
+## E. Spurious markers from an out-of-plot border/title — root cause found and fixed
+
+Symptom (`427551-204-R_P2_gc2623.png`): a dense row of spurious detections strung
+along the bottom of the image, over the x-axis tick labels and the "Study Days"
+title; the plot box (overlay) spanned the whole image.
+
+Root cause: `find_spines` took the bottom spine as the **lowest** long dark
+horizontal line (`hrows.max()`). This image has a **page/figure border line ~5px
+above the image bottom**, ~80px below the real baseline — so the border won, and
+the box bottom landed at the page edge. `series_mask` keeps `top+2 : bottom+8`, so
+the keep-band then extended down over the tick labels + title; those dark glyphs
+became blobs and were detected as markers (50 detections, ~36 spurious). The same
+mechanism affected the **top** edge: titles *above* the plot (e.g.
+`PDX 187727-110-R`) were detected when the box top extended above the cream area.
+
+Fix: constrain spine candidates to the **cream plotting region**. `find_spines`
+now computes the cream bbox (`_plot_bbox`) once and drops any candidate line
+beyond it (small margin) before taking the extremes; a border/title outside the
+plot is no longer eligible. Regression guard: `tests/test_find_spines_border.py`.
+
+Impact, before/after over all **3133** `single_curve` images: **18 files changed
+— 13 dropped spurious title/label/border detections (−200 spurious markers; e.g.
+42→6, 50→14, 46→13), 5 had identical detections with a sub-0.1-unit calibration
+shift (a ~1px box-edge nudge), and 0 regressed** (no real markers lost — verified
+on the largest and smallest drops; 0 calibration failures introduced). The real
+44-image set (`verify_system`) and the synthetic benchmark are unchanged (those
+images have no out-of-plot rules).

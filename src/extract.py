@@ -12,6 +12,12 @@ Usage:
   python src/extract.py DIR                       # every *.jpeg/*.png in DIR
   python src/extract.py DIR -o out --overlay      # also write overlay PNGs
   python src/extract.py DIR --format json         # json instead of csv
+  python src/extract.py DIR --workers 8           # cap worker processes
+  python src/extract.py DIR --workers 1           # force sequential (debugging)
+
+A whole directory is processed in parallel across CPU cores with a tqdm progress
+bar; per-image outputs are written by the workers, the aggregate files by the
+parent.
 
 Outputs (in the output dir, default ./output):
   <name>.csv / <name>.json   per-image extracted markers
@@ -19,15 +25,27 @@ Outputs (in the output dir, default ./output):
   summary.csv                per-image status (n markers, calibration quality)
   overlays/<name>.png        optional visual check
 """
+import os
+# Limit each process to a single math/OCR thread BEFORE numpy/cv2/tesseract load,
+# so N worker processes don't oversubscribe the CPU (the win comes from process
+# parallelism across images, not threads within one image).
+os.environ.setdefault("OMP_THREAD_LIMIT", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+
 import argparse
 import csv
 import glob
 import json
-import os
 import sys
 from collections import Counter
+from multiprocessing import Pool
 
 import cv2
+from tqdm import tqdm
+
+cv2.setNumThreads(1)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from markers import detect_markers, draw_overlay
@@ -103,12 +121,54 @@ def gather(paths):
     return sorted(set(files))
 
 
+def _process_one(task):
+    """Worker: extract one image, write its per-image outputs, and return only a
+    small aggregate payload. The full image array stays in the worker (never
+    pickled back to the parent), which is what makes the parallelism cheap."""
+    path, out, fmt, overlay = task
+    name = os.path.splitext(os.path.basename(path))[0]
+    base = os.path.basename(path)
+    empty = {"image": base, "n_detected": 0, "n_markers": 0, "calibrated": False,
+             "x_rms": "", "x_inliers": "", "x_labels": "", "x_step": "",
+             "y_rms": "", "y_inliers": "", "y_labels": "", "y_step": ""}
+    try:
+        res = extract_image(path)
+    except Exception as e:  # keep going across the dataset
+        return {"image": base, "error": str(e), "rows": [], "summary": empty}
+
+    if fmt in ("csv", "both"):
+        write_csv(res, os.path.join(out, name + ".csv"))
+    if fmt in ("json", "both"):
+        write_json(res, os.path.join(out, name + ".json"))
+    if overlay:
+        ov = draw_overlay(res["_bgr"], res["_pixels"], res["_box"])
+        cv2.imwrite(os.path.join(out, "overlays", name + ".png"), ov)
+
+    xa, ya = res["x_axis"], res["y_axis"]
+    return {
+        "image": res["image"], "error": None,
+        "rows": [[res["image"], r["x"], r["y"]] for r in res["markers"]],
+        "summary": {
+            "image": res["image"],
+            "n_detected": len(res["_pixels"]),   # markers found (drawn on the overlay)
+            "n_markers": res["n_markers"],         # markers written to the CSV
+            "calibrated": res["calibrated"],
+            "x_rms": xa["rms"] if xa else "", "x_inliers": xa["inliers"] if xa else "",
+            "x_labels": xa["n_labels"] if xa else "", "x_step": xa["step"] if xa else "",
+            "y_rms": ya["rms"] if ya else "", "y_inliers": ya["inliers"] if ya else "",
+            "y_labels": ya["n_labels"] if ya else "", "y_step": ya["step"] if ya else "",
+        },
+    }
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Extract data-marker (x,y) values from line graphs.")
     ap.add_argument("inputs", nargs="+", help="image file(s) or directory")
     ap.add_argument("-o", "--out", default="output", help="output directory (default: output)")
     ap.add_argument("--format", choices=["csv", "json", "both"], default="csv")
     ap.add_argument("--overlay", action="store_true", help="also write overlay PNGs")
+    ap.add_argument("--workers", type=int, default=None,
+                    help="worker processes (default: all CPU cores; 1 = sequential)")
     args = ap.parse_args(argv)
 
     files = gather(args.inputs)
@@ -118,38 +178,24 @@ def main(argv=None):
     if args.overlay:
         os.makedirs(os.path.join(args.out, "overlays"), exist_ok=True)
 
-    all_rows, summary = [], []
-    for path in files:
-        try:
-            res = extract_image(path)
-        except Exception as e:  # keep going across the dataset
-            print(f"  ERROR {os.path.basename(path)}: {e}")
-            summary.append({"image": os.path.basename(path), "n_detected": 0,
-                            "n_markers": 0, "calibrated": False, "x_rms": "", "y_rms": ""})
-            continue
-        name = os.path.splitext(os.path.basename(path))[0]
-        if args.format in ("csv", "both"):
-            write_csv(res, os.path.join(args.out, name + ".csv"))
-        if args.format in ("json", "both"):
-            write_json(res, os.path.join(args.out, name + ".json"))
-        if args.overlay:
-            ov = draw_overlay(res["_bgr"], res["_pixels"], res["_box"])
-            cv2.imwrite(os.path.join(args.out, "overlays", name + ".png"), ov)
-        for r in res["markers"]:
-            all_rows.append([res["image"], r["x"], r["y"]])
-        xa, ya = res["x_axis"], res["y_axis"]
-        summary.append({
-            "image": res["image"],
-            "n_detected": len(res["_pixels"]),   # markers found (drawn on the overlay)
-            "n_markers": res["n_markers"],         # markers written to the CSV
-            "calibrated": res["calibrated"],
-            "x_rms": xa["rms"] if xa else "", "x_inliers": xa["inliers"] if xa else "",
-            "x_labels": xa["n_labels"] if xa else "", "x_step": xa["step"] if xa else "",
-            "y_rms": ya["rms"] if ya else "", "y_inliers": ya["inliers"] if ya else "",
-            "y_labels": ya["n_labels"] if ya else "", "y_step": ya["step"] if ya else "",
-        })
-        flag = "" if res["calibrated"] else "  [NOT CALIBRATED]"
-        print(f"  {res['image']:24s} {res['n_markers']:3d} markers{flag}")
+    tasks = [(p, args.out, args.format, args.overlay) for p in files]
+    n_workers = args.workers if args.workers is not None else (os.cpu_count() or 1)
+    n_workers = max(1, min(n_workers, len(tasks)))
+
+    results = []
+    if n_workers == 1:                                   # sequential (single image / debugging)
+        for t in tqdm(tasks, desc="Extracting", unit="img"):
+            results.append(_process_one(t))
+    else:
+        with Pool(processes=n_workers) as pool:
+            for res in tqdm(pool.imap_unordered(_process_one, tasks),
+                            total=len(tasks), desc="Extracting", unit="img", file=sys.stdout):
+                results.append(res)
+
+    results.sort(key=lambda r: r["image"])               # deterministic output order
+    all_rows = [row for r in results for row in r["rows"]]
+    summary = [r["summary"] for r in results]
+    errors = [r for r in results if r.get("error")]
 
     with open(os.path.join(args.out, "all_markers.csv"), "w", newline="") as f:
         w = csv.writer(f); w.writerow(["image", "x", "y"]); w.writerows(all_rows)
@@ -162,6 +208,11 @@ def main(argv=None):
     ncal = sum(1 for s in summary if s["calibrated"])
     print(f"\n{len(files)} images -> {args.out}/  "
           f"({ncal}/{len(files)} calibrated, {sum(s['n_markers'] for s in summary)} markers total)")
+    uncal = [s["image"] for s in summary if not s["calibrated"] and s["image"] not in {e["image"] for e in errors}]
+    if uncal:
+        print(f"  not calibrated ({len(uncal)}): {', '.join(uncal)}")
+    for e in errors:
+        print(f"  ERROR {e['image']}: {e['error']}")
 
 
 if __name__ == "__main__":

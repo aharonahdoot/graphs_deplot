@@ -156,3 +156,53 @@ visual corner crops of synthetic and real overlays.
 # real-image end-to-end sanity (no ground truth; success + range checks)
 .venv/bin/python tests/verify_system.py
 ```
+
+---
+
+## 6. The top / final-point miss — two wrong fixes, then the right one
+
+Symptom (user-reported, frequent): on plots cropped tight at the top, the
+connecting line appears to "terminate early" and the final / highest point is not
+detected.
+
+**Wrong fix #1 — pad the top (proposed, rejected).** Hypothesis: too little white
+padding above the plot. Implemented faithfully (detect insufficient top-white →
+prepend white + a fresh top spine); tested on the confirmed cases: **detection
+count unchanged.** Where a marker is genuinely clipped, its pixels were discarded
+at render time, so adding canvas can't restore them; and two of the test images
+already had white top-padding yet still missed the point. Padding is a *correlate*
+of the problem, not a lever on it.
+
+**Wrong fix #2 — a `_recover_terminus` pass (built, then reverted).** It took the
+topmost *thick* blob in the right portion of the plot and recovered it. On the
+synthetic set it doubled FPs (92→186) by picking the left-spine top; restricting
+to the right portion zeroed that *on synthetic*. But a manual review of the ~700
+real "recoveries" showed **almost none sat on an actual marker glyph** — the pass
+was picking the point where the rising line simply **exits the top of the plot**
+(an off-chart point whose value exceeds the y-axis maximum) and asserting a marker
+there. A line terminus is not a data point. Reverted.
+
+**Root cause (the real one).** `find_spines` takes the box top as the topmost
+strong horizontal line. On a plot **cut off at the top image edge** (cream runs to
+the top, no margin/frame), that line is the first **gridline** — one tick *below*
+the true top. The box ends a tick early, so a real marker in that top tick band is
+excluded by the `series_mask` keep region and missed; and the cut line stub at the
+too-low box edge is what the terminus pass was hallucinating on.
+
+**Fix (`find_spines`, gated by `_RECOVER_CUT_TOP`).** When the cream interior
+extends above the detected top, walk the top up through the cream to the cut edge.
+The highest marker is then inside the box and detected **normally** — and because
+the normal detector requires a prominent glyph, a line merely *exiting* the top
+(off-chart) yields nothing, so no hallucination. Framed / margined charts stop at
+the white row above the frame and are unaffected.
+
+Impact (single_curve, 3133 imgs): box-top correction recovers a real top marker on
+**144** images (+1 each, 1 fewer; recovered points verified as actual glyphs);
+reverting the terminus pass removed **~597** hallucinated points. Synthetic FP back
+to 92 (terminus gone); real 44-image set and the spine/origin/border regressions
+unchanged. Guard: `tests/test_find_spines_cut_top.py`. Review tooling:
+`tools/build_recovery_review.py` + `tools/review_gui.py`.
+
+Lesson: a connecting-line endpoint is *not* evidence of a data point. Recovery
+must key on an actual marker glyph (thickness/prominence), and the fix for a
+clipped peak is to get the **box** right, not to guess points at line ends.

@@ -22,8 +22,13 @@ trained model — so its behaviour and failure modes can be reasoned about and
 reproduced exactly. Three stages:
 
 ### 2.1 Marker detection (`src/markers.py`)
-1. **Plot frame** (`find_spines`): the axes are the outermost long dark
-   vertical/horizontal lines; this gives the plot box.
+1. **Plot frame** (`find_spines`): the axes are the longest dark
+   vertical/horizontal lines, **constrained to the cream plotting region** so a
+   page/figure border outside the plot is never mistaken for an axis (§4). Two
+   edge corrections: a border line *below* the plot is rejected, and when the
+   plot is **cut off at the top image edge** (cream runs to the top with no margin
+   or frame) the box top is walked up through the cream to the true cut edge —
+   otherwise it stops one gridline early and clips the highest data point.
 2. **Series mask**: the series is segmented as *significantly darker than the
    cream background* **OR** *high-saturation* (`(dk > 30) | (S > 70)`). This is
    colour-agnostic — it captures black, coloured, and pale series without
@@ -46,8 +51,10 @@ reproduced exactly. Three stages:
    (domain prior, FP-free by construction: it adds at most one marker where ink
    exists); and the **origin corner** (`x = x_min, y ≈ 0`, quartered by *both*
    axes) — recovered from a colour mask (drops the grey spine) + vertical opening
-   (drops the thin line) + a thickness/roundness gate, confined to the corner so
-   no false positives are added across the baseline (see §4).
+   (drops the thin line) + a thickness/roundness gate, confined to the corner.
+   (The peak/top point is handled instead by the cut-top box correction in step 1,
+   *not* a recovery pass — a dedicated "terminus" recovery was tried and rejected,
+   §4, because it hallucinated points where a line merely exits the plot.)
 
 ### 2.2 Axis calibration (`src/calibrate.py`)
 1. **OCR the tick labels** with tesseract (`--psm 11`, numeric whitelist,
@@ -147,21 +154,21 @@ against truth. Latest run (N = 500, seed 7; `notes/synthetic_benchmark_results.m
 
 - **Detection precision:** matched markers land **median 0.70 px** (p90 3.15 px)
   from the true centre.
-- **Recall:** 92.0% overall (10219/11109); by shape **✕ 84.3% (worst) →
-  diamond 96.4% / circle 95.3%**; small radius (4–5 px) 90.2%. By boundary case:
-  right-edge bisected **94.0%**, **left-spine day-0 point (x=0, y>0) 98.8%**,
+- **Recall:** 92.2% overall (10237/11109); by shape **✕ 84.3% (worst) →
+  diamond 96.5% / circle 95.3%**; small radius (4–5 px) 90.2%. By boundary case:
+  right-edge bisected **96.8%**, **left-spine day-0 point (x=0, y>0) 98.8%**,
   **origin (x=0, y=0, quartered by both axes) 95.7%** (was 33% before the spine /
   corner recovery, §2.1.4), and **interior-x y = 0 baseline 66.7%** (the residual
-  documented limitation — §4). False positives 253 / 10472.
-- **Per-marker value error**, reported two ways. *Conditional* (the 439
+  documented limitation — §4). False positives 252 / 10489.
+- **Per-marker value error**, reported two ways. *Conditional* (the 441
   correctly-calibrated graphs — the method's precision when it works): end-to-end
   **X median 0.11 %, Y median 0.34 %** of axis span (p90 0.35 % / 0.73 %). *Full*
-  (all 475 calibrated graphs, *including* the 36 gross misreads): medians
+  (all 475 calibrated graphs, *including* the 34 gross misreads): medians
   essentially unchanged (X 0.12 %, Y 0.35 %), p90 0.52 % / 0.85 %, but **X max
-  blows up to ~10⁹ %** — i.e. the gross-misread tail is real but rare (36/475)
+  blows up to ~10⁹ %** — i.e. the gross-misread tail is real but rare (34/475)
   and barely moves the median/p90.
 - **Calibration outcome** (reported as a first-class metric, *not* folded into
-  precision): **439/500 correct, 36 gross misread, 25 hard fail.** The hard-fails
+  precision): **441/500 correct, 34 gross misread, 25 hard fail.** The hard-fails
   produce no curve at all (§5.6) and are flagged `calibrated: False` in the
   output — a visible failure, not silent bad data.
 
@@ -172,16 +179,16 @@ the connecting line interpolates. Comparing the whole extracted curve (using
 **all** detected markers, including false positives) to the known curve, again
 conditional vs full:
 
-- *conditional (correct calibration):* curve mean-absolute error **0.48 %** of
-  y-span (p90 1.02 %); AUC error **0.41 %** of plot area; peak **0.40 %**;
+- *conditional (correct calibration):* curve mean-absolute error **0.47 %** of
+  y-span (p90 0.97 %); AUC error **0.41 %** of plot area; peak **0.38 %**;
   time-to-half-peak **0.2 days**.
-- *full (all calibrated, incl. the 36 misreads):* curve MAE **0.49 %** (p90
-  3.20 %, max 496 %); AUC **0.43 %** (p90 2.14 %); peak **0.42 %**.
+- *full (all calibrated, incl. the 34 misreads):* curve MAE **0.49 %** (p90
+  2.80 %, max 496 %); AUC **0.43 %** (p90 1.95 %); peak **0.41 %**.
 - **whole-pipeline recovery over ALL 500 graphs, counting every failure** (the 36
   gross misreads *and* the 25 hard-fails that produce no curve): the growth-curve
   AUC is within 5 % of truth on **443/500 (89 %)**.
 
-So although per-marker recall is 92.0 % (✕-markers 84 %, interior baseline 67 %), the
+So although per-marker recall is 92.2 % (✕-markers 84 %, interior baseline 67 %), the
 extracted **growth dynamics** — AUC, peak, timing — are reproduced to well under
 1 % on the graphs that calibrate, and the *whole pipeline including all failure
 modes* recovers the growth curve on 89 % of graphs. The recall limitations are
