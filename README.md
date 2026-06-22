@@ -8,12 +8,29 @@ square / triangle) and line weights (thin / bold).
 
 ## Table of Contents
 
+- [How it works](#how-it-works)
 - [Verification](#verification)
 - [Accuracy](#accuracy)
 - [Install](#install)
 - [Usage](#usage)
   - [Use it from Python](#use-it-from-python)
-- [How it works](#how-it-works)
+
+## How it works
+
+1. **Marker detection** (`src/markers.py`) — segment the series by darkness
+   relative to the cream background OR by saturation (colour-agnostic), then
+   find markers as **prominence peaks (h-maxima) of the distance transform**.
+   The connecting line is a thin ridge that ascends to its endpoint markers, so
+   it is never a regional maximum and produces no false peaks — even for bold
+   lines. The prominence threshold (h=1.5) sits between line-rasterisation
+   "staircase" noise (~1.2) and overlapping-marker prominence (~2.0), so dense
+   overlapping markers are separated.
+2. **Axis calibration** (`src/calibrate.py`) — OCR the axis tick labels
+   (tesseract) and fit a robust linear pixel→value transform per axis by
+   **RANSAC** (the line through some pair of tick labels that the most other
+   labels agree with, within a quarter tick step, then a least-squares refit on
+   those inliers), tolerant of occasional OCR misreads.
+3. **Extraction** (`src/extract.py`) — map each marker pixel to (x, y).
 
 ## Verification
 
@@ -199,22 +216,5 @@ print(res["calibrated"], res["n_markers"])
 for m in res["markers"]:
     print(m["x"], m["y"])          # data values; m["px"], m["py"] are pixels
 ```
-
-## How it works
-
-1. **Marker detection** (`src/markers.py`) — segment the series by darkness
-   relative to the cream background OR by saturation (colour-agnostic), then
-   find markers as **prominence peaks (h-maxima) of the distance transform**.
-   The connecting line is a thin ridge that ascends to its endpoint markers, so
-   it is never a regional maximum and produces no false peaks — even for bold
-   lines. The prominence threshold (h=1.5) sits between line-rasterisation
-   "staircase" noise (~1.2) and overlapping-marker prominence (~2.0), so dense
-   overlapping markers are separated.
-2. **Axis calibration** (`src/calibrate.py`) — OCR the axis tick labels
-   (tesseract) and fit a robust linear pixel→value transform per axis by
-   **RANSAC** (the line through some pair of tick labels that the most other
-   labels agree with, within a quarter tick step, then a least-squares refit on
-   those inliers), tolerant of occasional OCR misreads.
-3. **Extraction** (`src/extract.py`) — map each marker pixel to (x, y).
 
 
