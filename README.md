@@ -6,6 +6,15 @@ interpolating line between them. Designed to be reliable across the dataset
 despite different background colours, line colours, marker symbols (circle /
 square / triangle) and line weights (thin / bold).
 
+## Table of Contents
+
+- [Verification](#verification)
+- [Accuracy](#accuracy)
+- [Install](#install)
+- [Usage](#usage)
+  - [Use it from Python](#use-it-from-python)
+- [How it works](#how-it-works)
+
 ## Verification
 
 ```bash
@@ -72,15 +81,6 @@ On N=500 synthetic graphs the full pipeline recovers the **growth trajectory**
 recovers the growth-curve AUC within 5 % of truth on 89 % of all graphs counting
 every failure mode. See [`METHODS.md`](METHODS.md) for the full validity argument
 and `experiments/notes/synthetic_benchmark_results.md` for the raw numbers.
-
-## Table of Contents
-
-- [Verification](#verification)
-- [Accuracy](#accuracy)
-- [Install](#install)
-- [Usage](#usage)
-  - [Use it from Python](#use-it-from-python)
-- [How it works](#how-it-works)
 
 ## Install
 
@@ -216,4 +216,5 @@ for m in res["markers"]:
    labels agree with, within a quarter tick step, then a least-squares refit on
    those inliers), tolerant of occasional OCR misreads.
 3. **Extraction** (`src/extract.py`) — map each marker pixel to (x, y).
+
 
